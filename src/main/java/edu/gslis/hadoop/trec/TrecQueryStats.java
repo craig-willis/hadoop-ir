@@ -177,6 +177,7 @@ public class TrecQueryStats extends Configured implements Tool
          */
         public void reduce(Text key, Iterable<IntWritable> values, Context context) 
                 throws IOException, InterruptedException 
+        {
             long sum = 0;
             long count = 0;
             for (IntWritable value: values) {
