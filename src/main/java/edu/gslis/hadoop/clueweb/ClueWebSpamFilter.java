@@ -1,4 +1,4 @@
-package edu.gslis.hadoop;
+package edu.gslis.hadoop.clueweb;
 
 import java.io.IOException;
 import java.sql.Connection;
