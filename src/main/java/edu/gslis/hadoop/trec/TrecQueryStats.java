@@ -27,9 +27,6 @@ import org.apache.hadoop.util.ToolRunner;
 import edu.umd.cloud9.collection.trec.TrecDocument;
 import edu.umd.cloud9.collection.trec.TrecDocumentInputFormat;
 
-/**
- * MapReduce job to run queries against the ClueWeb09 collection
- */
 public class TrecQueryStats extends Configured implements Tool 
 {
     private static final String TOKENIZER = "[^0-9A-Za-z]+";
@@ -116,14 +113,16 @@ public class TrecQueryStats extends Configured implements Tool
             long docLen = 0;
             Scanner scan = new Scanner(text.toLowerCase()).useDelimiter(TOKENIZER);
             while (scan.hasNext()) {
-                docLen++;
                 String term = scan.next();
+                if (stoplist.contains(term))
+                    continue;
                 
                 int tf = 0;
                 if (docTF.get(term) != null)
                     tf = docTF.get(term);
                 
                 docTF.put(term, ++tf);
+                docLen++;
             }
 
             if (docLen > 0) 
@@ -137,24 +136,20 @@ public class TrecQueryStats extends Configured implements Tool
                         continue;
                     
                     for (String docterm: docTF.keySet()) {
-                        if (qterm.equals(docterm))
-                            continue;
-                        
-                        // Map key
-                        termPair.set(qterm + "\t" + docterm);
-                        
+                                                
                         int qtermFreq = 0;
                         if (docTF.get(qterm) != null)
                             qtermFreq = docTF.get(qterm);
 
-                        int doctermFreq = 0;
-                        if (docTF.get(docterm) != null)
-                            doctermFreq = docTF.get(docterm);
+                        int doctermFreq = docTF.get(docterm);
 
                         // Only emit terms that co-occur
                         if (qtermFreq > 0 && doctermFreq > 0)
                         {
     
+                            // Map key
+                            termPair.set(qterm + "\t" + docterm);
+
                             int minfreq = Math.min(qtermFreq,  doctermFreq);                            
                             
                             freq.set(minfreq);
