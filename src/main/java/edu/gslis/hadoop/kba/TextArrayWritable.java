@@ -1,4 +1,4 @@
-package edu.gslis.hadoop.trec;
+package edu.gslis.hadoop.kba;
 
 import org.apache.hadoop.io.ArrayWritable;
 import org.apache.hadoop.io.Text;

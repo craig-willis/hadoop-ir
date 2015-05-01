@@ -1,7 +1,6 @@
 package edu.gslis.hadoop.kba;
 
 import java.io.IOException;
-
 import java.net.URI;
 import java.text.DecimalFormat;
 import java.util.HashMap;
@@ -39,7 +38,6 @@ import edu.gslis.filtering.thresholds.ThresholdFinderEmpiricalThresh;
 import edu.gslis.kba.adaptation.QuantileThresholding;
 import edu.gslis.searchhits.SearchHit;
 import edu.gslis.searchhits.SearchHits;
-import edu.gslis.hadoop.trec.TextArrayWritable;
 import edu.umd.cloud9.collection.trec.TrecDocumentInputFormat;
 
 /**

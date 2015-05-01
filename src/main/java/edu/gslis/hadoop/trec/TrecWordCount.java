@@ -1,15 +1,17 @@
 	package edu.gslis.hadoop.trec;
 
-import java.io.*;
-
-
+import java.io.IOException;
+import java.io.StringReader;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.*;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -47,6 +49,7 @@ public class TrecWordCount extends Configured implements Tool
 	{
 		Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_43);
 		Text term = new Text();
+
 
 		public void map(LongWritable key, TrecDocument doc, Context context) 
 						throws IOException, InterruptedException
