@@ -24,7 +24,6 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
@@ -39,41 +38,41 @@ import edu.umd.cloud9.collection.trec.TrecDocumentInputFormat;
 public class TrecToHBase extends Configured implements Tool 
 {
 
-    static Pattern  tagsPat 
+    static Pattern tagsPat 
         = Pattern.compile("<[^>]+>", Pattern.CASE_INSENSITIVE | Pattern.MULTILINE | Pattern.DOTALL);
 
 
     public static class TrecTextMapper extends Mapper <LongWritable, TrecDocument, Text, Text> 
     {
-        Text docId = new Text();
+        Text docno = new Text();
         Text text = new Text();
 
         public void map(LongWritable key, TrecDocument doc, Context context) 
-                        throws IOException, InterruptedException
-        {           
+                throws IOException, InterruptedException
+                {           
 
             String id = doc.getDocid();
             String content = getText(doc);
-            
-            docId.set(id);
+
+            docno.set(id);
             text.set(content);
-            
-            context.write(docId, text);             
-        }
-        
+
+            context.write(docno, text);             
+                }
+
         /**
          * Get the text element
          */
         private static String getText(TrecDocument doc) {
 
             String content = doc.getContent();
-            
+
             content = tagsPat.matcher(content).replaceAll(" ");
-            
+
             return content;
         }
     }
-    
+
     public static class TrecTextReducer extends TableReducer <Text, Text, ImmutableBytesWritable> 
     {       
 
@@ -81,90 +80,84 @@ public class TrecToHBase extends Configured implements Tool
                 throws IOException, InterruptedException 
         {
             for (Text value : values) {
-                
-                String docId = key.toString();
+                String docno = key.toString();
                 byte[] docVector = getDocVector(value);
-                Put put = new Put(Bytes.toBytes(docId));
+                Put put = new Put(Bytes.toBytes(docno));
                 put.add(Bytes.toBytes("cf"), Bytes.toBytes("dv"), docVector);
                 context.write(null, put);
             }
         }
-        
+
         public byte[] getDocVector(Text text) {
             Bag bag = new HashBag();
-            
+
             StringTokenizer tok = new StringTokenizer(text.toString());
             while (tok.hasMoreTokens()) {
                 bag.add(tok.nextToken());
             }
-            
+
             byte[] bytes = null;
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             ObjectOutput out = null;
-            try {
-              out = new ObjectOutputStream(bos);   
-              out.writeObject(bag);
-              bytes = bos.toByteArray();
+            try 
+            {
+                out = new ObjectOutputStream(bos);   
+                out.writeObject(bag);
+                bytes = bos.toByteArray();
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
-              try {
-                if (out != null) {
-                  out.close();
-                }
-              } catch (IOException ex) {
-                // ignore close exception
-              }
-              try {
-                bos.close();
-              } catch (IOException ex) {
-                // ignore close exception
-              }
-        }
+                try {
+                    if (out != null) 
+                        out.close();
+                } catch (IOException ex) {}
+                try {
+                    bos.close();
+                } catch (IOException ex) {}
+            }
             return bytes;
-
         }
     }
-      
-  public int run(String[] args) throws Exception 
-  {
-      Configuration config = HBaseConfiguration.create();
-      Job job = Job.getInstance(config);
-      job.setJarByClass(TrecToHBase.class); 
 
-      job.setInputFormatClass(TrecDocumentInputFormat.class);
+    public int run(String[] args) throws Exception 
+    {
 
-      Scan scan = new Scan();
-      scan.setCaching(500);     
-      scan.setCacheBlocks(false);
+        String tableName = args[0];
+        String inputPath = args[1];
 
-      TableMapReduceUtil.initTableReducerJob(
-          "test",        // output table
-          TrecTextReducer.class,    // reducer class
-          job);
-      job.setNumReduceTasks(1);   // at least one, adjust as required
+        Configuration config = HBaseConfiguration.create();
+        Job job = Job.getInstance(config);
+        job.setJarByClass(TrecToHBase.class); 
 
-      job.setOutputKeyClass(Text.class);
-      job.setOutputValueClass(Text.class);
+        job.setInputFormatClass(TrecDocumentInputFormat.class);
 
-      job.setMapperClass(TrecTextMapper.class);
-//      job.setCombinerClass(MyTableReducer.class);
-//      job.setReducerClass(MyTableReducer.class);
+        Scan scan = new Scan();
+        scan.setCaching(500);     
+        scan.setCacheBlocks(false);
 
-      FileInputFormat.addInputPath(job, new Path(args[0]));
-      FileOutputFormat.setOutputPath(job, new Path(args[1]));
-      
-      
-      boolean b = job.waitForCompletion(true);
-      if (!b) {
-          throw new IOException("error with job!");
-      }
-      return 0;
-  }
+        TableMapReduceUtil.initTableReducerJob(
+            tableName,
+            TrecTextReducer.class,
+            job
+        );
 
-  public static void main(String[] args) throws Exception {
-      
-    int res = ToolRunner.run(new Configuration(), new TrecToHBase(), args);
-    System.exit(res);
-  }
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+
+        job.setMapperClass(TrecTextMapper.class);
+
+        FileInputFormat.addInputPath(job, new Path(inputPath));      
+
+        boolean b = job.waitForCompletion(true);
+        if (!b) {
+            throw new IOException("error with job!");
+        }
+        return 0;
+    }
+
+    public static void main(String[] args) throws Exception {
+
+        int res = ToolRunner.run(new Configuration(), new TrecToHBase(), args);
+        System.exit(res);
+    }
 }

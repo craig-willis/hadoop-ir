@@ -36,20 +36,23 @@ public class CollectionStatsHBase extends Configured implements Tool
         numberOfTerms,
         numberOfTokens
     }
-    
-    public static class TrecTableMapper extends TableMapper<Text, IntWritable> {
 
+    public static class TrecTableMapper extends TableMapper<Text, IntWritable> 
+    {
         Text term = new Text();
         IntWritable freq = new IntWritable();
+        
+        @SuppressWarnings("unchecked")
         public void map(ImmutableBytesWritable row, Result result, Context context) 
-                throws InterruptedException, IOException {
+                throws InterruptedException, IOException
+        {
 
             context.getCounter(CollectionStats.numberOfDocuments).increment(1L);
 
             byte[] bytes = result.getValue(Bytes.toBytes("cf"), Bytes.toBytes("dv"));
-            
-            try {
-                
+
+            try 
+            {
                 ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
                 ObjectInputStream objInputStream = new ObjectInputStream(bis);
                 Bag docVector = (HashBag)objInputStream.readObject();
@@ -59,7 +62,7 @@ public class CollectionStatsHBase extends Configured implements Tool
                     int count = docVector.getCount(t);
                     freq.set(docVector.getCount(t));
                     context.write(term, freq);
-                    
+
                     context.getCounter(CollectionStats.numberOfTokens).increment(count);
                 }
             } catch (Exception e) {
@@ -67,11 +70,10 @@ public class CollectionStatsHBase extends Configured implements Tool
             }        
         }
     }
-        
-    
+
+
     public static class CollStatsReducer extends TableReducer <Text, IntWritable, ImmutableBytesWritable> 
     {       
-
         public void reduce(Text key, Iterable<IntWritable> values, Context context)
                 throws IOException, InterruptedException 
         {
@@ -80,7 +82,7 @@ public class CollectionStatsHBase extends Configured implements Tool
             int sum = 0;
             for (IntWritable value : values)
                 sum += value.get();
-                
+
             String term = key.toString();
 
             Put put = new Put(Bytes.toBytes(term));
@@ -88,53 +90,55 @@ public class CollectionStatsHBase extends Configured implements Tool
             context.write(null, put);
         }
     }
-      
-  public int run(String[] args) throws Exception 
-  {
-      Configuration config = HBaseConfiguration.create();
-      Job job = Job.getInstance(config);
-      job.setJarByClass(CollectionStatsHBase.class); 
 
-      Scan scan = new Scan();
-      scan.setCaching(500);     
-      scan.setCacheBlocks(false);
+    public int run(String[] args) throws Exception 
+    {
+        String docTableName = args[0];
+        String statsTableName = args[1];
 
-      TableMapReduceUtil.initTableMapperJob(
-              "test",        // input HBase table name
-              scan,             // Scan instance to control CF and attribute selection
-              TrecTableMapper.class,   // mapper
-              Text.class,             // mapper output key
-              IntWritable.class,             // mapper output value
-              job);
-      
-      TableMapReduceUtil.initTableReducerJob(
-              "stats",        // output table
-              CollStatsReducer.class,    // reducer class
-              job);
-      job.setNumReduceTasks(1);   // at least one, adjust as required
+        Configuration config = HBaseConfiguration.create();
+        Job job = Job.getInstance(config);
+        job.setJarByClass(CollectionStatsHBase.class); 
+
+        Scan scan = new Scan();
+        scan.setCaching(500);     
+        scan.setCacheBlocks(false);
+
+        TableMapReduceUtil.initTableMapperJob(
+            docTableName, 
+            scan,
+            TrecTableMapper.class,
+            Text.class,
+            IntWritable.class,
+            job
+        );
+
+        TableMapReduceUtil.initTableReducerJob(
+            statsTableName,
+            CollStatsReducer.class,
+            job
+        );
+
+        boolean b = job.waitForCompletion(true);
+        if (!b) {
+            throw new IOException("error with job!");
+        }
 
 
-      
-      boolean b = job.waitForCompletion(true);
-      if (!b) {
-          throw new IOException("error with job!");
-      }
-      
-      
-    long numDocs = job.getCounters().findCounter(CollectionStats.numberOfDocuments).getValue();
-    long numTerms = job.getCounters().findCounter(CollectionStats.numberOfTerms).getValue();
-    long numTokens = job.getCounters().findCounter(CollectionStats.numberOfTokens).getValue();
-    HTable statsTable = new HTable(config, "stats");
-    Put put = new Put(Bytes.toBytes("#collstats"));
-    put.add(Bytes.toBytes("cf"), Bytes.toBytes("cs"), Bytes.toBytes(numDocs + "," + numTerms + "," + numTokens));
-    statsTable.put(put);
-    statsTable.close();
-      return 0;
-  }
+        long numDocs = job.getCounters().findCounter(CollectionStats.numberOfDocuments).getValue();
+        long numTerms = job.getCounters().findCounter(CollectionStats.numberOfTerms).getValue();
+        long numTokens = job.getCounters().findCounter(CollectionStats.numberOfTokens).getValue();
+        HTable statsTable = new HTable(config, statsTableName);
+        Put put = new Put(Bytes.toBytes("#collstats"));
+        put.add(Bytes.toBytes("cf"), Bytes.toBytes("cs"), Bytes.toBytes(numDocs + "," + numTerms + "," + numTokens));
+        statsTable.put(put);
+        statsTable.close();
+        return 0;
+    }
 
-  public static void main(String[] args) throws Exception {
-      
-    int res = ToolRunner.run(new Configuration(), new CollectionStatsHBase(), args);
-    System.exit(res);
-  }
+    public static void main(String[] args) throws Exception {
+
+        int res = ToolRunner.run(new Configuration(), new CollectionStatsHBase(), args);
+        System.exit(res);
+    }
 }

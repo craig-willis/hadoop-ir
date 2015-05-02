@@ -1,6 +1,8 @@
 package edu.gslis.hbase.trec;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.nio.ByteBuffer;
@@ -16,6 +18,7 @@ import org.apache.commons.collections.Bag;
 import org.apache.commons.collections.bag.HashBag;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.client.Get;
@@ -26,7 +29,6 @@ import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapper;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -42,11 +44,20 @@ import org.apache.hadoop.util.ToolRunner;
 public class RunQueryHBase extends Configured implements Tool 
 {
     private static final int TOP = 1000;
+    private static final double MU = 1000;
 
-    public static class TrecTableMapper extends TableMapper<Text, Text> {
+    public static class TrecTableMapper extends TableMapper<Text, Text> 
+    {
 
+        HTable statsTable = null; 
+        long numDocs = 0;
+        long numTerms = 0;
+        long numTokens = 0;
+        Map<String, Bag> queryMap = new HashMap<String, Bag>();
+        
         Text qidKey = new Text();
         Text scoreValue = new Text();
+                
 
         public void map(ImmutableBytesWritable row, Result result, Context context) 
                 throws InterruptedException, IOException {
@@ -54,33 +65,68 @@ public class RunQueryHBase extends Configured implements Tool
             byte[] bytes = result.getValue(Bytes.toBytes("cf"), Bytes.toBytes("dv"));
 
             String docid = new String(row.get());
-            double mu = 1000;
-            Bag qv = new HashBag();
-            qidKey.set("51");
-            qv.add("airbus");
-            qv.add("subsidy");
             try {
                 
                 ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
                 ObjectInputStream objInputStream = new ObjectInputStream(bis);
                 Bag dv = (HashBag)objInputStream.readObject();
-                double score = score(qv, dv, mu);
-                scoreValue.set(docid + "\t" + score);
-                context.write(qidKey, scoreValue);
-
+                
+                if (dv.size() > 0) {
+                    
+                    for (String query: queryMap.keySet()) 
+                    {
+                        Bag qv = queryMap.get(query);
+                                            
+                        double score = scoreDirichlet(qv, dv, MU);
+                        qidKey.set(query);                    
+                        scoreValue.set(docid + "\t" + score);
+                        context.write(qidKey, scoreValue);
+                    }
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }        
         }
-        
-        HTable statsTable = null; 
-        long numDocs = 0;
-        long numTerms = 0;
-        long numTokens = 0;
 
         public void setup(Context context) throws IOException {
+            
+            Configuration conf = context.getConfiguration();
+            String colTableName = conf.get("colTableName");
+            readCollectionStats(colTableName);
+            
+            Path[] localFiles = DistributedCache.getLocalCacheFiles(context.getConfiguration());
+            for (Path localFile: localFiles) {
+                System.out.println(localFile.toString());
+
+                if (localFile.getName().contains("topics"))
+                    readQueries(localFile);
+            }            
+        }
+        
+        /**
+         * Side-load the queries
+         */
+        private void readQueries(Path queryFile) throws IOException
+        {
+            System.out.println("readQueries: " + queryFile.toString());
+            BufferedReader br = new BufferedReader(new FileReader(queryFile.toString()));
+            String line = null;
+            while ((line = br.readLine()) != null) 
+            {
+              line = line.toLowerCase();
+              String [] fields = line.split(":");
+              String [] terms = fields[1].split(" ");   
+              Bag bag = new HashBag();
+              for (String term: terms)
+                  bag.add(term);
+              queryMap.put(fields[0], bag);
+            }
+            br.close();
+        }
+        
+        private void readCollectionStats(String tableName) throws IOException {
             Configuration config = HBaseConfiguration.create();
-            statsTable = new HTable(config, "stats");
+            statsTable = new HTable(config, tableName);
             Get g = new Get(Bytes.toBytes("#collstats"));
             Result r = statsTable.get(g);
             byte[] bytes = r.getValue(Bytes.toBytes("cf"), Bytes.toBytes("cs"));
@@ -88,10 +134,8 @@ public class RunQueryHBase extends Configured implements Tool
             String[] fields = cs.split(",");
             numDocs = Long.parseLong(fields[0]);
             numTerms = Long.parseLong(fields[1]);
-            numTokens = Long.parseLong(fields[2]);
-            
-            
-
+            numTokens = Long.parseLong(fields[2]);  
+            System.out.println("Read table " + tableName + ": " + numDocs + "," + numTerms + "," + numTokens);
         }
         
         public void cleanup(Context context) throws IOException {
@@ -100,7 +144,8 @@ public class RunQueryHBase extends Configured implements Tool
         
         Map<String, Double> collProb = new HashMap<String, Double>();
         
-        public double score(Bag qv, Bag dv, double mu) throws IOException {
+        @SuppressWarnings("unchecked")
+        public double scoreDirichlet(Bag qv, Bag dv, double mu) throws IOException {
             double logLikelihood = 0.0;
             Set<String> qterms = qv.uniqueSet();
             for (String q: qterms) {
@@ -116,6 +161,7 @@ public class RunQueryHBase extends Configured implements Tool
         
         public double collPr(String term) throws IOException {
             if (collProb.get(term) == null) {
+                System.out.println(term);
                 Get g = new Get(Bytes.toBytes(term));
                 Result r = statsTable.get(g);
                 byte[] bytes = r.getValue(Bytes.toBytes("cf"), Bytes.toBytes("cf"));
@@ -183,7 +229,13 @@ public class RunQueryHBase extends Configured implements Tool
       
   public int run(String[] args) throws Exception 
   {
+      String colTableName = args[0];
+      String docTableName = args[1];
+      String topicFile = args[2];
+      String outputPath = args[3];
+
       Configuration config = HBaseConfiguration.create();
+      config.set("colTableName", colTableName);
       Job job = Job.getInstance(config);
       job.setJarByClass(RunQueryHBase.class); 
 
@@ -192,12 +244,13 @@ public class RunQueryHBase extends Configured implements Tool
       scan.setCacheBlocks(false);
 
       TableMapReduceUtil.initTableMapperJob(
-              "test",        // input HBase table name
-              scan,             // Scan instance to control CF and attribute selection
-              TrecTableMapper.class,   // mapper
-              Text.class,             // mapper output key
-              Text.class,             // mapper output value
-              job);
+          docTableName, 
+          scan, 
+          TrecTableMapper.class,
+          Text.class, 
+          Text.class, 
+          job
+      );
       
 
       job.setReducerClass(RunQueryReducer.class);
@@ -205,14 +258,13 @@ public class RunQueryHBase extends Configured implements Tool
       job.setOutputValueClass(Text.class);
       job.setOutputFormatClass(TextOutputFormat.class);
       
-      FileOutputFormat.setOutputPath(job, new Path(args[0]));
-      job.setNumReduceTasks(1);   // at least one, adjust as required
-
+      DistributedCache.addCacheFile(new Path(topicFile).toUri(), job.getConfiguration());      
+      FileOutputFormat.setOutputPath(job, new Path(outputPath));
       
       boolean b = job.waitForCompletion(true);
-      if (!b) {
+      if (!b)
           throw new IOException("error with job!");
-      }
+      
       return 0;
   }
 
