@@ -1,12 +1,11 @@
 package edu.gslis.hbase.trec;
 
 import java.io.ByteArrayInputStream;
+
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.util.Set;
 
-import org.apache.commons.collections.Bag;
-import org.apache.commons.collections.bag.HashBag;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.hbase.HBaseConfiguration;
@@ -25,6 +24,8 @@ import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
+import edu.gslis.textrepresentation.FeatureVector;
+
 
 /**
  * Calculate collection statistics and store in Hbase
@@ -42,7 +43,6 @@ public class CollectionStatsHBase extends Configured implements Tool
         Text term = new Text();
         IntWritable freq = new IntWritable();
         
-        @SuppressWarnings("unchecked")
         public void map(ImmutableBytesWritable row, Result result, Context context) 
                 throws InterruptedException, IOException
         {
@@ -55,12 +55,12 @@ public class CollectionStatsHBase extends Configured implements Tool
             {
                 ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
                 ObjectInputStream objInputStream = new ObjectInputStream(bis);
-                Bag docVector = (HashBag)objInputStream.readObject();
-                Set<String> terms = (Set<String>)docVector.uniqueSet();
+                FeatureVector docVector = (FeatureVector)objInputStream.readObject();
+                Set<String> terms = docVector.getFeatures();
                 for (String t: terms) {
                     term.set(t);
-                    int count = docVector.getCount(t);
-                    freq.set(docVector.getCount(t));
+                    int count = (int)docVector.getFeatureWeight(t);
+                    freq.set(count);
                     context.write(term, freq);
 
                     context.getCounter(CollectionStats.numberOfTokens).increment(count);

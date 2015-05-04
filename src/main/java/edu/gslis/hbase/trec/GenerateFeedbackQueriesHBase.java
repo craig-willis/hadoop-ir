@@ -9,7 +9,9 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,16 +38,26 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 import edu.gslis.textrepresentation.FeatureVector;
+import edu.gslis.utils.KeyValuePair;
+import edu.gslis.utils.ScorableComparator;
 
 
 /**
- * Calculate collection statistics and store in Hbase
+ * Generate feedback queries using Lavrenko's RM
  */
-public class RunQueryHBase extends Configured implements Tool 
+public class GenerateFeedbackQueriesHBase extends Configured implements Tool 
 {
     private static final int TOP = 1000;
-    private static final double[] mus = {100, 300, 500, 700, 1000, 1500, 2000, 2500};
-    private static final double[] lambdas = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
+    //private static final double[] mus = {100, 300, 500, 700, 1000, 1500, 2000, 2500};
+    //private static final double[] lambdas = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
+    //private static final int[] numDocs = {5, 10, 15, 20, 25, 30, 35, 40, 45, 50};
+    //private static final int[] numTerms = {5, 10, 15, 20, 25, 30, 35, 40, 45, 50};
+    //private static final double[] rmLambdas = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
+    
+    private static final double[] mus = {1500};
+    private static final int[] numDocs = {5, 10, 15, 20, 25, 30, 35, 40, 45, 50};
+    private static final int[] numTerms = {5, 10, 15, 20, 25, 30, 35, 40, 45, 50};
+    private static final double[] rmLambdas = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
     
     public static class TrecTableMapper extends TableMapper<Text, Text> 
     {
@@ -85,13 +97,16 @@ public class RunQueryHBase extends Configured implements Tool
                             context.write(qidKey, scoreValue);
                         }
                         
+                        /*
                         for (double mu: mus) {
                             double score = scoreCrossEntropy(qv, dv, mu);
                             qidKey.set("cer," + query + "," + mu);                    
                             scoreValue.set(docid + "\t" + score);
                             context.write(qidKey, scoreValue);
                         }
+                        */
                         
+                        /*
                         for (double lambda: lambdas) {
                             double score = scoreJM(qv, dv, lambda);
                             qidKey.set("jm," + query + "," + lambda);                    
@@ -107,6 +122,7 @@ public class RunQueryHBase extends Configured implements Tool
                                 context.write(qidKey, scoreValue);
                             }
                         }
+                        */
                     }
                 }
             } catch (Exception e) {
@@ -134,6 +150,12 @@ public class RunQueryHBase extends Configured implements Tool
          */
         private void readQueries(Path queryFile) throws IOException
         {
+            /*
+          FeatureVector qv = new FeatureVector(null);
+          qv.addTerm("airbus");
+          qv.addTerm("subsidy");
+          queryMap.put("51", qv);
+          */
             System.out.println("readQueries: " + queryFile.toString());
             BufferedReader br = new BufferedReader(new FileReader(queryFile.toString()));
             String line = null;
@@ -170,6 +192,7 @@ public class RunQueryHBase extends Configured implements Tool
         
         Map<String, Double> collProb = new HashMap<String, Double>();
         
+
         public double scoreDirichlet(FeatureVector qv, FeatureVector dv, double mu) throws IOException {
             double logLikelihood = 0.0;
             Set<String> qterms = qv.getFeatures();
@@ -246,7 +269,7 @@ public class RunQueryHBase extends Configured implements Tool
                 if (bytes != null) {
                     cf = ByteBuffer.wrap(bytes).getInt();
                 }
-                double cp = cf/(double)numTokens;
+                double cp = (1+cf)/(double)numTokens;
                 collProb.put(term,  cp);
 
             }
@@ -257,11 +280,17 @@ public class RunQueryHBase extends Configured implements Tool
         
     public static class RunQueryReducer extends Reducer<Text, Text, Text, Text> 
     {
+        HTable docsTable = null; 
+        Map<String, FeatureVector> queryMap = new HashMap<String, FeatureVector>();
+
         Text output = new Text();
         public void reduce(Text key, Iterable<Text> values, Context context) 
                 throws IOException, InterruptedException 
         {
             // query \t document \t score
+            String[] queryFields = key.toString().split(",");
+            String qid = queryFields[1];
+            FeatureVector qv = queryMap.get(qid);
             Iterator<Text> it = values.iterator();
             List<Result> results = new ArrayList<Result>();
             while (it.hasNext()) {
@@ -272,13 +301,191 @@ public class RunQueryHBase extends Configured implements Tool
             }
             // Sort by score
             Collections.sort(results);
+            
             // Only keep the top K
             if (results.size() > TOP)
                 results = results.subList(0, TOP);
-            for (Result result: results) {
-                output.set(result.getDocid() + "\t" + result.getScore());
-                context.write(key, output);
+            
+            // Generate the RM3 queries
+            for (int fbDocs: numDocs) 
+            {
+                FeatureVector fv = getFeedbackVector(fbDocs, results);
+                
+                for (int fbTerms: numTerms) 
+                {
+                    FeatureVector tmpfv = copyFeatureVector(fv);
+                    tmpfv.clip(fbTerms);
+                    tmpfv.normalize();
+                    for (double rmLambda: rmLambdas) 
+                    {
+                        FeatureVector rm3 =
+                                FeatureVector.interpolate(qv, tmpfv, rmLambda);
+                        rm3.normalize();    
+
+                        String params = fbDocs + ":" + fbTerms + ":" + rmLambda;
+
+                        context.write(new Text(qid + "," + params), new Text(toString(rm3)));
+                    }                
+                }
             }
+        }
+        
+                
+        public String toString(FeatureVector fv) 
+        {
+            List<KeyValuePair> kvpList = new ArrayList<KeyValuePair>(fv.getFeatureCount());
+            Set<String> terms = fv.getFeatures();
+            for (String term: terms) {
+                double weight = fv.getFeatureWeight(term);
+                KeyValuePair keyValuePair = new KeyValuePair(term, weight);
+                kvpList.add(keyValuePair);
+            }
+            ScorableComparator comparator = new ScorableComparator(true);
+            Collections.sort(kvpList, comparator);
+
+
+            StringBuffer sb = new StringBuffer();
+            
+            Iterator<KeyValuePair> it = kvpList.iterator();
+            while(it.hasNext()) {
+                KeyValuePair pair = it.next();
+                sb.append(" " + pair.getKey() + ":" + pair.getScore());
+            }
+            return sb.toString().trim();            
+        }
+        
+        public FeatureVector copyFeatureVector(FeatureVector fv) {
+            FeatureVector copy = new FeatureVector(null);
+            Iterator<String> it = fv.iterator();
+            while(it.hasNext()) {
+                String term = it.next();
+                copy.addTerm(term, fv.getFeatureWeight(term));
+            }
+            return copy;
+        }
+        
+        public static FeatureVector cleanModel(FeatureVector model) {
+            FeatureVector cleaned = new FeatureVector(null);
+            Iterator<String> it = model.iterator();
+            while(it.hasNext()) {
+                String term = it.next();
+                if(term.length() < 3 || term.matches(".*[0-9].*"))
+                    continue;
+                cleaned.addTerm(term, model.getFeatureWeight(term));
+            }
+            cleaned.normalize();
+            return cleaned;
+        }
+        
+        public void setup(Context context) throws IOException {
+            
+            Configuration conf = context.getConfiguration();
+            String tableName = conf.get("docTableName");
+
+            Configuration config = HBaseConfiguration.create();
+            docsTable = new HTable(config, tableName);
+            
+            Path[] localFiles = DistributedCache.getLocalCacheFiles(context.getConfiguration());
+            for (Path localFile: localFiles) {
+                System.out.println(localFile.toString());
+
+                if (localFile.getName().contains("topics"))
+                    readQueries(localFile);
+            }          
+        }
+        
+        /**
+         * Side-load the queries
+         */
+        private void readQueries(Path queryFile) throws IOException
+        {
+            /*
+            FeatureVector qv = new FeatureVector(null);
+            qv.addTerm("airbus");
+            qv.addTerm("subsidy");
+            queryMap.put("51", qv);
+            */
+            System.out.println("readQueries: " + queryFile.toString());
+            BufferedReader br = new BufferedReader(new FileReader(queryFile.toString()));
+            String line = null;
+            while ((line = br.readLine()) != null) 
+            {
+              line = line.toLowerCase();
+              String [] fields = line.split(":");
+              String [] terms = fields[1].split(" ");   
+              FeatureVector qv = new FeatureVector(null);
+              for (String term: terms)
+                  qv.addTerm(term.trim());
+              queryMap.put(fields[0], qv);
+            }
+            br.close();
+        }
+        
+        public void cleanup(Context context) throws IOException {
+            docsTable.close();
+        }
+        
+        public FeatureVector getDocVector(String docno) throws IOException, ClassNotFoundException {
+            Get g = new Get(Bytes.toBytes(docno));
+            org.apache.hadoop.hbase.client.Result r = docsTable.get(g);
+            byte[] bytes = r.getValue(Bytes.toBytes("cf"), Bytes.toBytes("dv"));
+            
+            ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
+            ObjectInputStream objInputStream = new ObjectInputStream(bis);
+            FeatureVector dv = (FeatureVector)objInputStream.readObject();
+            return dv;
+        }
+        
+        public FeatureVector getFeedbackVector(int fbDocs, List<Result> results) 
+        {
+            Set<String> vocab = new HashSet<String>();
+            List<FeatureVector> fbDocVectors = new LinkedList<FeatureVector>();
+
+            FeatureVector rm = new FeatureVector(null);
+
+            if (fbDocs > results.size())
+                fbDocs = results.size();
+
+            double[] rsvs = new double[fbDocs];
+            
+            try 
+            {
+                for (int k=0; k < fbDocs; k++) {
+                    Result res = results.get(k);
+                    double score = res.getScore();
+                    rsvs[k] = Math.exp(score);
+    
+                    FeatureVector dv = getDocVector(res.getDocid());
+    
+                    vocab.addAll(dv.getFeatures());
+                    fbDocVectors.add(dv);
+                }
+    
+                
+                Iterator<String> it = vocab.iterator();
+                while(it.hasNext()) {
+                    String term = it.next();
+                    
+                    double fbWeight = 0;
+                    for (int i=0; i<fbDocVectors.size(); i++) {                    
+                        FeatureVector docVector = fbDocVectors.get(i);
+                        double rsv = rsvs[i];
+                        
+                        double docProb = docVector.getFeatureWeight(term) / docVector.getLength();
+                        double docWeight = 1.0;                        
+                        docProb *= rsv;
+                        docProb *= docWeight;
+                        fbWeight += docProb;                            
+                    }
+                    
+                    fbWeight /= fbDocVectors.size();
+                    
+                    rm.addTerm(term, fbWeight);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return cleanModel(rm);
         }
         
         class Result implements Comparable<Result> {
@@ -313,8 +520,9 @@ public class RunQueryHBase extends Configured implements Tool
 
       Configuration config = HBaseConfiguration.create(getConf());
       config.set("colTableName", colTableName);
+      config.set("docTableName", docTableName);
       Job job = Job.getInstance(config);
-      job.setJarByClass(RunQueryHBase.class); 
+      job.setJarByClass(GenerateFeedbackQueriesHBase.class); 
 
       Scan scan = new Scan();
       scan.setCaching(500);     
@@ -347,7 +555,7 @@ public class RunQueryHBase extends Configured implements Tool
 
   public static void main(String[] args) throws Exception {
       
-    int res = ToolRunner.run(new Configuration(), new RunQueryHBase(), args);
+    int res = ToolRunner.run(new Configuration(), new GenerateFeedbackQueriesHBase(), args);
     System.exit(res);
   }
 }

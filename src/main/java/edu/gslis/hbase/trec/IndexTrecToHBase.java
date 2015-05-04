@@ -5,10 +5,9 @@ import java.io.IOException;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.util.StringTokenizer;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.apache.commons.collections.Bag;
-import org.apache.commons.collections.bag.HashBag;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
@@ -20,6 +19,7 @@ import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableReducer;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.MapWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
@@ -27,38 +27,46 @@ import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
+import edu.gslis.textrepresentation.FeatureVector;
 import edu.umd.cloud9.collection.trec.TrecDocument;
 import edu.umd.cloud9.collection.trec.TrecDocumentInputFormat;
 
 
 /**
+ * Indexes documents in TREC-text format into an Hbase table
+ * containing document vectors (bag) and timestamps.
  * MapReduce job to convert documents in Trec-text format to Hbase document vectors
  *      docno timestamp vector (bag)
  */
-public class TrecToHBase extends Configured implements Tool 
+public class IndexTrecToHBase extends Configured implements Tool 
 {
 
     static Pattern tagsPat 
         = Pattern.compile("<[^>]+>", Pattern.CASE_INSENSITIVE | Pattern.MULTILINE | Pattern.DOTALL);
 
 
-    public static class TrecTextMapper extends Mapper <LongWritable, TrecDocument, Text, Text> 
+    static Pattern epochPat 
+        = Pattern.compile(".*<EPOCH>([^<]*)<.*", Pattern.CASE_INSENSITIVE | Pattern.MULTILINE | Pattern.DOTALL);
+
+    public static class TrecTextMapper extends Mapper <LongWritable, TrecDocument, Text, MapWritable> 
     {
         Text docno = new Text();
-        Text text = new Text();
-
+ 
         public void map(LongWritable key, TrecDocument doc, Context context) 
                 throws IOException, InterruptedException
-                {           
+        {           
 
             String id = doc.getDocid();
             String content = getText(doc);
+            long epoch = getEpoch(doc);
 
             docno.set(id);
-            text.set(content);
+            MapWritable data = new MapWritable();
+            data.put(new Text("text"), new Text(content));
+            data.put(new Text("epoch"), new LongWritable(epoch));
 
-            context.write(docno, text);             
-                }
+            context.write(docno, data);             
+        }
 
         /**
          * Get the text element
@@ -71,29 +79,48 @@ public class TrecToHBase extends Configured implements Tool
 
             return content;
         }
+        
+        /**
+         * Get the epoch element
+         */
+        private static long getEpoch(TrecDocument doc) {
+
+            String content = doc.getContent();
+
+            Matcher m = epochPat.matcher(content);
+            long epoch = -1;
+            if (m.matches()) {
+                epoch = Long.parseLong(m.group(1));
+            }
+
+            return epoch;
+        }
     }
 
-    public static class TrecTextReducer extends TableReducer <Text, Text, ImmutableBytesWritable> 
+    public static class TrecTextReducer extends TableReducer <Text, MapWritable, ImmutableBytesWritable> 
     {       
 
-        public void reduce(Text key, Iterable<Text> values, Context context)
+        public void reduce(Text key, Iterable<MapWritable> values, Context context)
                 throws IOException, InterruptedException 
         {
-            for (Text value : values) {
+            for (MapWritable value : values) {
                 String docno = key.toString();
-                byte[] docVector = getDocVector(value);
+                Text text = (Text)value.get(new Text("text"));
+                LongWritable epoch = (LongWritable)value.get(new Text("epoch"));
+                byte[] docVector = getDocVector(text);
                 Put put = new Put(Bytes.toBytes(docno));
                 put.add(Bytes.toBytes("cf"), Bytes.toBytes("dv"), docVector);
+                put.add(Bytes.toBytes("cf"), Bytes.toBytes("epoch"), Bytes.toBytes(epoch.get()));
                 context.write(null, put);
             }
         }
 
         public byte[] getDocVector(Text text) {
-            Bag bag = new HashBag();
+            FeatureVector dv = new FeatureVector(null);
 
             StringTokenizer tok = new StringTokenizer(text.toString());
             while (tok.hasMoreTokens()) {
-                bag.add(tok.nextToken());
+                dv.addTerm(tok.nextToken());
             }
 
             byte[] bytes = null;
@@ -102,7 +129,7 @@ public class TrecToHBase extends Configured implements Tool
             try 
             {
                 out = new ObjectOutputStream(bos);   
-                out.writeObject(bag);
+                out.writeObject(dv);
                 bytes = bos.toByteArray();
             } catch (Exception e) {
                 e.printStackTrace();
@@ -127,7 +154,7 @@ public class TrecToHBase extends Configured implements Tool
 
         Configuration config = HBaseConfiguration.create();
         Job job = Job.getInstance(config);
-        job.setJarByClass(TrecToHBase.class); 
+        job.setJarByClass(IndexTrecToHBase.class); 
 
         job.setInputFormatClass(TrecDocumentInputFormat.class);
 
@@ -142,7 +169,7 @@ public class TrecToHBase extends Configured implements Tool
         );
 
         job.setOutputKeyClass(Text.class);
-        job.setOutputValueClass(Text.class);
+        job.setOutputValueClass(MapWritable.class);
 
         job.setMapperClass(TrecTextMapper.class);
 
@@ -157,7 +184,7 @@ public class TrecToHBase extends Configured implements Tool
 
     public static void main(String[] args) throws Exception {
 
-        int res = ToolRunner.run(new Configuration(), new TrecToHBase(), args);
+        int res = ToolRunner.run(new Configuration(), new IndexTrecToHBase(), args);
         System.exit(res);
     }
 }
