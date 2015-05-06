@@ -1,6 +1,7 @@
 package edu.gslis.hbase.trec;
 
 import java.io.ByteArrayOutputStream;
+
 import java.io.IOException;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
@@ -27,7 +28,6 @@ import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-import edu.gslis.textrepresentation.FeatureVector;
 import edu.umd.cloud9.collection.trec.TrecDocument;
 import edu.umd.cloud9.collection.trec.TrecDocumentInputFormat;
 
@@ -116,7 +116,7 @@ public class IndexTrecToHBase extends Configured implements Tool
         }
 
         public byte[] getDocVector(Text text) {
-            FeatureVector dv = new FeatureVector(null);
+            FeatureVector dv = new FeatureVector();
 
             StringTokenizer tok = new StringTokenizer(text.toString());
             while (tok.hasMoreTokens()) {
@@ -152,7 +152,7 @@ public class IndexTrecToHBase extends Configured implements Tool
         String tableName = args[0];
         String inputPath = args[1];
 
-        Configuration config = HBaseConfiguration.create();
+        Configuration config = HBaseConfiguration.create(getConf());
         Job job = Job.getInstance(config);
         job.setJarByClass(IndexTrecToHBase.class); 
 

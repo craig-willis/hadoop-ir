@@ -5,8 +5,6 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.util.Set;
 
-import org.apache.commons.collections.Bag;
-import org.apache.commons.collections.bag.HashBag;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.client.Get;
@@ -55,10 +53,10 @@ public class DumpIndexHBase {
             
             ByteArrayInputStream bis = new ByteArrayInputStream(value);
             ObjectInputStream objInputStream = new ObjectInputStream(bis);
-            Bag bag = (HashBag)objInputStream.readObject();
-            Set<String> terms = bag.uniqueSet();
+            FeatureVector dv = (FeatureVector)objInputStream.readObject();
+            Set<String> terms = dv.getFeatures();
             for (String term: terms) {
-                int count = bag.getCount(term);
+                double count = dv.getFeatureWeight(term);
                 System.out.println(term + " " + count);
             }
             table.close();

@@ -24,7 +24,6 @@ import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-import edu.gslis.textrepresentation.FeatureVector;
 
 
 /**
@@ -96,7 +95,7 @@ public class CollectionStatsHBase extends Configured implements Tool
         String docTableName = args[0];
         String statsTableName = args[1];
 
-        Configuration config = HBaseConfiguration.create();
+        Configuration config = HBaseConfiguration.create(getConf());
         Job job = Job.getInstance(config);
         job.setJarByClass(CollectionStatsHBase.class); 
 

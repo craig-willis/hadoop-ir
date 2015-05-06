@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -34,8 +35,6 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
-
-import edu.gslis.textrepresentation.FeatureVector;
 
 
 /**
@@ -85,6 +84,7 @@ public class RunQueryHBase extends Configured implements Tool
                             context.write(qidKey, scoreValue);
                         }
                         
+                        /*
                         for (double mu: mus) {
                             double score = scoreCrossEntropy(qv, dv, mu);
                             qidKey.set("cer," + query + "," + mu);                    
@@ -107,6 +107,7 @@ public class RunQueryHBase extends Configured implements Tool
                                 context.write(qidKey, scoreValue);
                             }
                         }
+                        */
                     }
                 }
             } catch (Exception e) {
@@ -140,12 +141,19 @@ public class RunQueryHBase extends Configured implements Tool
             while ((line = br.readLine()) != null) 
             {
               line = line.toLowerCase();
-              String [] fields = line.split(":");
-              String [] terms = fields[1].split(" ");   
-              FeatureVector qv = new FeatureVector(null);
-              for (String term: terms)
-                  qv.addTerm(term.trim());
-              queryMap.put(fields[0], qv);
+              //51,5:5:0.1      airbus:0.40790284157041523 subsidy:0.27441106804306636 aircraft:0.11027637707219344 trade:0.10518909354136353 germany:0.10222061977296132
+              // 51      airbus:1 subsidy:1
+              String [] fields = line.split("\t");
+              String queryParams = fields[0];              
+              FeatureVector qv = new FeatureVector();
+              String[] termWeights = fields[1].split(" ");
+              for (String termWeight: termWeights) {
+                  String[] tw = termWeight.split(":");
+                  String term = tw[0];
+                  double weight = Double.valueOf(tw[1]);
+                  qv.addTerm(term, weight);
+              }
+              queryMap.put(queryParams, qv);
             }
             br.close();
         }
@@ -257,17 +265,20 @@ public class RunQueryHBase extends Configured implements Tool
         
     public static class RunQueryReducer extends Reducer<Text, Text, Text, Text> 
     {
+        Qrels qrels = null;
         Text output = new Text();
         public void reduce(Text key, Iterable<Text> values, Context context) 
                 throws IOException, InterruptedException 
         {
-            // query \t document \t score
+            //            "twostage," + query + "," + mu + ":" + lambda
+            String[] queryParams = key.toString().split(",");
+            String qid = queryParams[1];
             Iterator<Text> it = values.iterator();
-            List<Result> results = new ArrayList<Result>();
+            List<SearchResult> results = new ArrayList<SearchResult>();
             while (it.hasNext()) {
                 Text value = it.next();
                 String[] fields = value.toString().split("\t");
-                Result rs = new Result(fields[0].toString(), Double.valueOf(fields[1]));
+                SearchResult rs = new SearchResult(fields[0].toString(), Double.valueOf(fields[1]));
                 results.add(rs);
             }
             // Sort by score
@@ -275,33 +286,40 @@ public class RunQueryHBase extends Configured implements Tool
             // Only keep the top K
             if (results.size() > TOP)
                 results = results.subList(0, TOP);
-            for (Result result: results) {
+            
+            Eval eval = new Eval(results, qrels);
+            double map = eval.map(qid);
+            double p10 = eval.precisionAt(qid, 10);
+            double p20 = eval.precisionAt(qid, 20);
+
+            context.write(key, new Text("metrics," + map + ","  + "," + p10 + "," + p20));
+//            context.write(key,  output);
+            for (SearchResult result: results) {
                 output.set(result.getDocid() + "\t" + result.getScore());
                 context.write(key, output);
             }
+            
+            //context.write(key,  new Text("metrics," + map + ","  + "," + p10 + "," + p20));
+
         }
         
-        class Result implements Comparable<Result> {
-            String docid;
-            double score;
-            
-            public Result(String docid, double score) {
-                this.docid = docid;
-                this.score = score;
-            }
-
-            @Override
-            public int compareTo(Result o1) {
-                return Double.compare(o1.score, score);
-            }
-            
-            public String getDocid() {
-                return docid;
-            }
-            public double getScore() {
-                return score;
-            }
+        public void setup(Context context) throws IOException {
+                        
+            Path[] localFiles = DistributedCache.getLocalCacheFiles(context.getConfiguration());
+            for (Path localFile: localFiles) {
+                System.out.println(localFile.toString());
+                if (localFile.getName().contains("qrels"))
+                    readQrels(localFile);
+            }            
         }
+        
+        public void readQrels(Path qrelsFile) {
+
+            qrels = new Qrels(qrelsFile.toString(), false, 1);
+        }
+
+        
+        
     }
       
   public int run(String[] args) throws Exception 
@@ -309,7 +327,8 @@ public class RunQueryHBase extends Configured implements Tool
       String colTableName = args[0];
       String docTableName = args[1];
       String topicFile = args[2];
-      String outputPath = args[3];
+      String qrelsFile = args[3];
+      String outputPath = args[4];
 
       Configuration config = HBaseConfiguration.create(getConf());
       config.set("colTableName", colTableName);
@@ -334,8 +353,9 @@ public class RunQueryHBase extends Configured implements Tool
       job.setOutputKeyClass(Text.class);
       job.setOutputValueClass(Text.class);
       job.setOutputFormatClass(TextOutputFormat.class);
-      
+
       DistributedCache.addCacheFile(new Path(topicFile).toUri(), job.getConfiguration());      
+      DistributedCache.addCacheFile(new Path(qrelsFile).toUri(), job.getConfiguration());      
       FileOutputFormat.setOutputPath(job, new Path(outputPath));
       
       boolean b = job.waitForCompletion(true);

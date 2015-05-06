@@ -1,6 +1,8 @@
 package edu.gslis.hbase.trec;
 
 import java.io.BufferedReader;
+
+
 import java.io.ByteArrayInputStream;
 import java.io.FileReader;
 import java.io.IOException;
@@ -37,9 +39,6 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-import edu.gslis.textrepresentation.FeatureVector;
-import edu.gslis.utils.KeyValuePair;
-import edu.gslis.utils.ScorableComparator;
 
 
 /**
@@ -164,7 +163,7 @@ public class GenerateFeedbackQueriesHBase extends Configured implements Tool
               line = line.toLowerCase();
               String [] fields = line.split(":");
               String [] terms = fields[1].split(" ");   
-              FeatureVector qv = new FeatureVector(null);
+              FeatureVector qv = new FeatureVector();
               for (String term: terms)
                   qv.addTerm(term.trim());
               queryMap.put(fields[0], qv);
@@ -355,7 +354,7 @@ public class GenerateFeedbackQueriesHBase extends Configured implements Tool
         }
         
         public FeatureVector copyFeatureVector(FeatureVector fv) {
-            FeatureVector copy = new FeatureVector(null);
+            FeatureVector copy = new FeatureVector();
             Iterator<String> it = fv.iterator();
             while(it.hasNext()) {
                 String term = it.next();
@@ -365,7 +364,7 @@ public class GenerateFeedbackQueriesHBase extends Configured implements Tool
         }
         
         public static FeatureVector cleanModel(FeatureVector model) {
-            FeatureVector cleaned = new FeatureVector(null);
+            FeatureVector cleaned = new FeatureVector();
             Iterator<String> it = model.iterator();
             while(it.hasNext()) {
                 String term = it.next();
@@ -413,7 +412,7 @@ public class GenerateFeedbackQueriesHBase extends Configured implements Tool
               line = line.toLowerCase();
               String [] fields = line.split(":");
               String [] terms = fields[1].split(" ");   
-              FeatureVector qv = new FeatureVector(null);
+              FeatureVector qv = new FeatureVector();
               for (String term: terms)
                   qv.addTerm(term.trim());
               queryMap.put(fields[0], qv);
@@ -441,7 +440,7 @@ public class GenerateFeedbackQueriesHBase extends Configured implements Tool
             Set<String> vocab = new HashSet<String>();
             List<FeatureVector> fbDocVectors = new LinkedList<FeatureVector>();
 
-            FeatureVector rm = new FeatureVector(null);
+            FeatureVector rm = new FeatureVector();
 
             if (fbDocs > results.size())
                 fbDocs = results.size();
