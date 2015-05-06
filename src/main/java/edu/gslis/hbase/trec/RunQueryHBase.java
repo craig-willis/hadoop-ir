@@ -42,7 +42,7 @@ import org.apache.hadoop.util.ToolRunner;
  */
 public class RunQueryHBase extends Configured implements Tool 
 {
-    private static final int TOP = 1000;
+    protected static final int TOP = 1000;
     private static final double[] mus = {100, 300, 500, 700, 1000, 1500, 2000, 2500};
     private static final double[] lambdas = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
     
@@ -63,6 +63,8 @@ public class RunQueryHBase extends Configured implements Tool
                 throws InterruptedException, IOException {
 
             byte[] bytes = result.getValue(Bytes.toBytes("cf"), Bytes.toBytes("dv"));
+            
+            long epoch = Bytes.toLong(result.getValue(Bytes.toBytes("cf"), Bytes.toBytes("epoch")));
 
             String docid = new String(row.get());
             try {
@@ -80,7 +82,7 @@ public class RunQueryHBase extends Configured implements Tool
                         for (double mu: mus) {
                             double score = scoreDirichlet(qv, dv, mu);
                             qidKey.set("dir," + query + "," + mu);                    
-                            scoreValue.set(docid + "\t" + score);
+                            scoreValue.set(docid + "\t" + epoch + "\t" + score);
                             context.write(qidKey, scoreValue);
                         }
                         
@@ -88,14 +90,14 @@ public class RunQueryHBase extends Configured implements Tool
                         for (double mu: mus) {
                             double score = scoreCrossEntropy(qv, dv, mu);
                             qidKey.set("cer," + query + "," + mu);                    
-                            scoreValue.set(docid + "\t" + score);
+                            scoreValue.set(docid + "\t" + epoch + "\t" + score);
                             context.write(qidKey, scoreValue);
                         }
                         
                         for (double lambda: lambdas) {
                             double score = scoreJM(qv, dv, lambda);
                             qidKey.set("jm," + query + "," + lambda);                    
-                            scoreValue.set(docid + "\t" + score);
+                            scoreValue.set(docid + "\t" + epoch + "\t" + score);
                             context.write(qidKey, scoreValue);
                         }
                         
@@ -103,7 +105,7 @@ public class RunQueryHBase extends Configured implements Tool
                             for (double mu: mus) {
                                 double score = scoreTwoStage(qv, dv, mu, lambda);
                                 qidKey.set("twostage," + query + "," + mu + ":" + lambda);                    
-                                scoreValue.set(docid + "\t" + score);
+                                scoreValue.set(docid + "\t" + epoch + "\t" + score);
                                 context.write(qidKey, scoreValue);
                             }
                         }
@@ -278,7 +280,7 @@ public class RunQueryHBase extends Configured implements Tool
             while (it.hasNext()) {
                 Text value = it.next();
                 String[] fields = value.toString().split("\t");
-                SearchResult rs = new SearchResult(fields[0].toString(), Double.valueOf(fields[1]));
+                SearchResult rs = new SearchResult(fields[0].toString(), Double.valueOf(fields[2]), Long.valueOf(fields[1]));
                 results.add(rs);
             }
             // Sort by score
@@ -292,12 +294,14 @@ public class RunQueryHBase extends Configured implements Tool
             double p10 = eval.precisionAt(qid, 10);
             double p20 = eval.precisionAt(qid, 20);
 
-            context.write(key, new Text("metrics," + map + ","  + "," + p10 + "," + p20));
-//            context.write(key,  output);
+            output.set(map + ","  + "," + p10 + "," + p20);
+            context.write(key,  output);
+            /*
             for (SearchResult result: results) {
                 output.set(result.getDocid() + "\t" + result.getScore());
                 context.write(key, output);
             }
+            */
             
             //context.write(key,  new Text("metrics," + map + ","  + "," + p10 + "," + p20));
 

@@ -4,10 +4,17 @@ package edu.gslis.hbase.trec;
 public class SearchResult  implements Comparable<SearchResult> {
     String docid;
     double score;
-    
+    long epoch = -1;
+
     public SearchResult(String docid, double score) {
         this.docid = docid;
         this.score = score;
+    }
+
+    public SearchResult(String docid, double score, long epoch) {
+        this.docid = docid;
+        this.score = score;
+        this.epoch = epoch;
     }
 
     @Override
@@ -24,5 +31,8 @@ public class SearchResult  implements Comparable<SearchResult> {
     }
     public double getScore() {
         return score;
+    }
+    public long getEpoch() {
+        return epoch;
     }
 }
