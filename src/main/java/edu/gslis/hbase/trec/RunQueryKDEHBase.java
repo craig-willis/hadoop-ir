@@ -14,6 +14,7 @@ import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Reducer.Context;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.ToolRunner;
@@ -33,6 +34,23 @@ public class RunQueryKDEHBase extends RunQueryHBase
         
         Qrels qrels = null;
         Text output = new Text();
+        
+        public void setup(Context context) throws IOException {
+            
+            Path[] localFiles = DistributedCache.getLocalCacheFiles(context.getConfiguration());
+            for (Path localFile: localFiles) {
+                System.out.println(localFile.toString());
+                if (localFile.getName().contains("qrels"))
+                    readQrels(localFile);
+            }            
+        }
+        
+        public void readQrels(Path qrelsFile) {
+
+            qrels = new Qrels(qrelsFile.toString(), false, 1);
+        }
+
+        
         public void reduce(Text key, Iterable<Text> values, Context context) 
                 throws IOException, InterruptedException 
         {
@@ -64,7 +82,7 @@ public class RunQueryKDEHBase extends RunQueryHBase
             try {
             
                 // 1) Use local R instance to calculate KDE
-                RKernelDensity dist = new RKernelDensity("localhost", 6631);
+                RKernelDensity dist = new RKernelDensity("localhost", 6311);
                 dist.estimate(epochs, scores);
                 
                 // 2) Sweep alpha
@@ -85,13 +103,13 @@ public class RunQueryKDEHBase extends RunQueryHBase
                     }
                     Collections.sort(rescored);
 
-                    Eval eval = new Eval(results, qrels);
+                    Eval eval = new Eval(rescored, qrels);
                     double map = eval.map(qid);
                     double p10 = eval.precisionAt(qid, 10);
                     double p20 = eval.precisionAt(qid, 20);
     
-                    output.set(map + ","  + "," + p10 + "," + p20);
-                    context.write(new Text(key.toString() + "," + alpha),  output);                
+                    output.set(map + "," + p10 + "," + p20);
+                    context.write(new Text(key.toString() + ":" + alpha),  output);                
                 }
             } catch (Exception e) { 
                 e.printStackTrace();
@@ -127,7 +145,7 @@ public class RunQueryKDEHBase extends RunQueryHBase
       );
       
 
-      job.setReducerClass(RunQueryReducer.class);
+      job.setReducerClass(KDEQueryReducer.class);
       job.setOutputKeyClass(Text.class);
       job.setOutputValueClass(Text.class);
       job.setOutputFormatClass(TextOutputFormat.class);
